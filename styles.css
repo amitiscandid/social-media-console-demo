@@ -1,10 +1,15 @@
-/* White theme + SLDS-inspired scoped tabs (standalone).
-   Fixes requested:
-   - White theme (no dark)
-   - Dropdown items readable (white bg + dark text)
-   - Remove left sidebar
-   - Top menu as SLDS-style tabs (not button pills)
-   - Multi-tab console behavior: page tabs + record tabs
+/* Social Media Console Prototype (v3) — white, product-like.
+   Updates:
+   - Align with Social Media-ToBe-SAA + Manager comments:
+     * Color states: BROWN (unattended), BLUE (SM attended/in progress), YELLOW (customer replied),
+       VIOLET (forwarded), ORANGE (internal dept comment), CLOSED
+     * Sorting rules:
+       - SM list: YELLOW top, then BROWN, then BLUE bottom (until customer replies)
+       - Forwarded/Updated: ORANGE top, then YELLOW, then VIOLET bottom
+   - Add notifications bell + drawer (SLA breaches, dept updates, customer replies)
+   - Add "Original Post" metadata + link placeholder
+   - Add reply templates dropdown
+   - Admin campaign assignment now clearly assign/remove/reassign and impacts "Owner"
 */
 
 :root{
@@ -17,9 +22,15 @@
   --line2:#dbe2ea;
   --brand:#0176d3;
   --brand2:#0b5cab;
-  --ok:#16a34a;
+
   --warn:#d97706;
   --bad:#dc2626;
+
+  --brown:#7c2d12;
+  --blue:#0b5cab;
+  --yellow:#92400e;
+  --violet:#6d28d9;
+  --orange:#c2410c;
 
   --radius:14px;
   --shadow: 0 12px 30px rgba(2,6,23,.08);
@@ -35,7 +46,7 @@ body{
   color: var(--text);
   background:
     radial-gradient(900px 600px at 15% -10%, rgba(1,118,211,.12), transparent 60%),
-    radial-gradient(900px 600px at 85% 0%, rgba(22,163,74,.08), transparent 60%),
+    radial-gradient(900px 600px at 85% 0%, rgba(109,40,217,.08), transparent 60%),
     linear-gradient(180deg, var(--bg), #ffffff);
 }
 
@@ -43,12 +54,11 @@ a{color:var(--brand); text-decoration:none}
 a:hover{text-decoration:underline}
 
 .topbar{
-  position:sticky; top:0; z-index:50;
+  position:sticky; top:0; z-index:60;
   border-bottom:1px solid var(--line);
-  background: rgba(255,255,255,.85);
+  background: rgba(255,255,255,.88);
   backdrop-filter: blur(10px);
 }
-
 .topbarRow{
   display:flex;
   align-items:center;
@@ -57,7 +67,6 @@ a:hover{text-decoration:underline}
   gap:12px;
   flex-wrap:wrap;
 }
-
 .brand{display:flex; align-items:center; gap:12px}
 .logo{
   width:38px;height:38px;
@@ -71,12 +80,7 @@ a:hover{text-decoration:underline}
 .brandTitle{font-weight:950; letter-spacing:.2px}
 .brandSub{font-size:12px; color:var(--muted)}
 
-.actions{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  flex-wrap:wrap;
-}
+.actions{display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
 .pill{
   border:1px solid var(--line);
   background: var(--card);
@@ -90,7 +94,7 @@ a:hover{text-decoration:underline}
   border-radius:12px;
   padding:9px 12px;
   cursor:pointer;
-  font-weight:800;
+  font-weight:850;
   color: var(--text);
   box-shadow: var(--shadow2);
 }
@@ -116,15 +120,9 @@ select, input[type="text"], textarea{
   outline:none;
 }
 select:focus, input:focus, textarea:focus{border-color: rgba(1,118,211,.45); box-shadow: 0 0 0 3px rgba(1,118,211,.12)}
+select option{background:#fff; color: var(--text)}
 textarea{min-height:110px; resize:vertical}
 
-/* Dropdown option readability */
-select option{
-  background:#ffffff;
-  color: var(--text);
-}
-
-/* SLDS-like scoped tabs bar */
 .slds-tabs_scoped__nav{
   list-style:none;
   margin:0;
@@ -136,11 +134,7 @@ select option{
   border-top:1px solid var(--line);
   background: rgba(255,255,255,.95);
 }
-.slds-tabs_scoped__item{
-  position:relative;
-  margin:0;
-  padding:0;
-}
+.slds-tabs_scoped__item{position:relative; margin:0; padding:0;}
 .slds-tabs_scoped__link{
   display:flex;
   align-items:center;
@@ -189,7 +183,7 @@ select option{
   color: var(--brand2);
 }
 
-/* Record tabs area (sub-tabs) */
+/* Record tabs */
 .recordTabBar{
   display:flex;
   align-items:center;
@@ -198,16 +192,10 @@ select option{
   border-bottom:1px solid var(--line);
   background: rgba(255,255,255,.9);
   position:sticky;
-  top: 108px; /* approximate height of topbar */
-  z-index:40;
+  top: 108px;
+  z-index:55;
 }
-.recordStrip{
-  display:flex;
-  gap:8px;
-  overflow:auto;
-  flex:1;
-  padding-bottom:2px;
-}
+.recordStrip{display:flex; gap:8px; overflow:auto; flex:1; padding-bottom:2px;}
 .rtab{
   display:flex;
   align-items:center;
@@ -217,26 +205,13 @@ select option{
   border-radius: 999px;
   padding:7px 10px;
   cursor:pointer;
-  max-width: 320px;
+  max-width: 360px;
   box-shadow: var(--shadow2);
 }
 .rtab:hover{border-color: rgba(1,118,211,.35)}
-.rtab.active{
-  border-color: rgba(1,118,211,.45);
-  background: rgba(1,118,211,.06);
-}
-.rtab .lbl{
-  font-size:12px;
-  font-weight:950;
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-}
-.rtab .meta{
-  font-size:11px;
-  color: var(--muted);
-  white-space:nowrap;
-}
+.rtab.active{border-color: rgba(1,118,211,.45); background: rgba(1,118,211,.06);}
+.rtab .lbl{font-size:12px; font-weight:950; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.rtab .meta{font-size:11px; color: var(--muted); white-space:nowrap;}
 .rtab .pin, .rtab .x{
   width:22px;height:22px;
   border-radius:999px;
@@ -250,22 +225,10 @@ select option{
 .rtab.pinned{border-color: rgba(217,119,6,.30)}
 .rtab.pinned .pin{background: rgba(217,119,6,.06); border-color: rgba(217,119,6,.25); color: var(--warn)}
 
-.container{
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 16px;
-}
+.container{max-width: 1400px; margin: 0 auto; padding: 16px;}
 
-.grid3{
-  display:grid;
-  grid-template-columns: 280px 1fr 420px;
-  gap:14px;
-}
-.grid2{
-  display:grid;
-  grid-template-columns: 420px 1fr;
-  gap:14px;
-}
+.grid3{display:grid; grid-template-columns: 280px 1fr 420px; gap:14px;}
+.grid2{display:grid; grid-template-columns: 440px 1fr; gap:14px;}
 @media(max-width:1200px){
   .grid3{grid-template-columns:1fr}
   .grid2{grid-template-columns:1fr}
@@ -283,6 +246,9 @@ select option{
 .muted{color: var(--muted)}
 .small{font-size:12px; color: var(--muted); line-height:1.35}
 .sep{border:none; border-top:1px solid var(--line); margin:12px 0}
+
+.filters{display:grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap:10px;}
+@media(max-width:1100px){ .filters{grid-template-columns: repeat(2, minmax(0,1fr));} }
 
 .list{display:flex; flex-direction:column; gap:8px}
 .listItem{
@@ -306,10 +272,11 @@ select option{
   font-weight:950;
   letter-spacing:.06em;
 }
-.badge.brown{border-color: rgba(120,53,15,.25); background: rgba(120,53,15,.06); color:#7c2d12}
-.badge.green{border-color: rgba(22,163,74,.25); background: rgba(22,163,74,.06); color:#166534}
-.badge.yellow{border-color: rgba(217,119,6,.25); background: rgba(217,119,6,.06); color:#92400e}
-.badge.blue{border-color: rgba(1,118,211,.25); background: rgba(1,118,211,.06); color: var(--brand2)}
+.badge.brown{border-color: rgba(124,45,18,.25); background: rgba(124,45,18,.06); color: var(--brown)}
+.badge.blue{border-color: rgba(1,118,211,.25); background: rgba(1,118,211,.06); color: var(--blue)}
+.badge.yellow{border-color: rgba(217,119,6,.25); background: rgba(217,119,6,.06); color: var(--yellow)}
+.badge.violet{border-color: rgba(109,40,217,.25); background: rgba(109,40,217,.06); color: var(--violet)}
+.badge.orange{border-color: rgba(194,65,12,.25); background: rgba(194,65,12,.06); color: var(--orange)}
 .badge.closed{border-color: rgba(100,116,139,.25); background: rgba(100,116,139,.06); color: var(--muted)}
 
 .slaPill{
@@ -336,34 +303,12 @@ select option{
 .caseTitle{font-weight:950; margin-bottom:6px}
 .caseMeta{display:flex; gap:10px; flex-wrap:wrap; font-size:12px; color: var(--muted)}
 
-.tabs{display:flex; gap:8px; flex-wrap:wrap; margin:10px 0}
-.tab{
-  padding:7px 10px;
-  border-radius: 999px;
-  border:1px solid var(--line2);
-  background: var(--card);
-  cursor:pointer;
-  font-size:12px;
-  font-weight:850;
-  color: var(--muted);
-}
-.tab.active{border-color: rgba(1,118,211,.40); background: rgba(1,118,211,.06); color: var(--text)}
-
-.filters{
-  display:grid;
-  grid-template-columns: repeat(6, minmax(0,1fr));
-  gap:10px;
-}
-@media(max-width:1100px){ .filters{grid-template-columns: repeat(2, minmax(0,1fr));} }
-
-/* Tables */
 table{border-collapse:collapse; width:100%}
 th, td{padding:10px 10px; border-bottom:1px solid var(--line); text-align:left; font-size:13px}
 th{font-size:12px; color: var(--muted); text-transform:uppercase; letter-spacing:.08em}
 tr.trClick{cursor:pointer}
 tr.trClick:hover{background: rgba(1,118,211,.04)}
 
-/* Thread */
 .threadItem{
   border:1px solid var(--line2);
   border-radius: 12px;
@@ -373,12 +318,7 @@ tr.trClick:hover{background: rgba(1,118,211,.04)}
 }
 .who{font-weight:950; font-size:12px}
 .when{font-size:12px; color: var(--muted); margin-top:6px}
-.hl{
-  display:flex;
-  gap:10px;
-  flex-wrap:wrap;
-  margin-top:8px;
-}
+.hl{display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;}
 .hlItem{
   padding:6px 10px;
   border-radius:999px;
@@ -387,9 +327,10 @@ tr.trClick:hover{background: rgba(1,118,211,.04)}
   font-size:12px;
   color: var(--muted);
 }
+
 .banner{
-  border:1px solid rgba(1,118,211,.25);
-  background: rgba(1,118,211,.06);
+  border:1px solid rgba(194,65,12,.25);
+  background: rgba(194,65,12,.06);
   border-radius: 12px;
   padding:10px;
   margin-bottom:12px;
@@ -406,14 +347,62 @@ tr.trClick:hover{background: rgba(1,118,211,.04)}
   margin-top:10px;
 }
 
-/* Toasts */
-.toastWrap{position:fixed; bottom:16px; left:16px; z-index:120; display:flex; flex-direction:column; gap:10px}
+/* Notifications */
+.iconBtn{
+  width:40px;height:40px;
+  border-radius:12px;
+  border:1px solid var(--line2);
+  background: var(--card);
+  cursor:pointer;
+  display:grid; place-items:center;
+  box-shadow: var(--shadow2);
+  position:relative;
+}
+.iconBtn:hover{border-color: rgba(1,118,211,.35)}
+.dot{
+  position:absolute;
+  top:8px; right:8px;
+  width:10px; height:10px;
+  border-radius:999px;
+  background: var(--warn);
+  border:2px solid #fff;
+}
+.drawerOverlay{
+  position:fixed; inset:0; background: rgba(2,6,23,.25);
+  z-index:120;
+}
+.drawer{
+  position:fixed; top:0; right:0;
+  width:min(460px, 92vw);
+  height:100%;
+  background:#fff;
+  border-left:1px solid var(--line2);
+  box-shadow: -10px 0 30px rgba(2,6,23,.12);
+  z-index:121;
+  display:flex;
+  flex-direction:column;
+}
+.drawerHead{
+  padding:14px 14px 10px;
+  border-bottom:1px solid var(--line);
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+}
+.drawerBody{padding:12px 14px; overflow:auto; flex:1}
+.drawerItem{
+  border:1px solid var(--line2);
+  background: var(--card2);
+  border-radius: 12px;
+  padding:10px;
+  margin-bottom:10px;
+}
+.drawerItem strong{display:block}
+.toastWrap{position:fixed; bottom:16px; left:16px; z-index:200; display:flex; flex-direction:column; gap:10px}
 .toast{
   border:1px solid var(--line2);
   background: rgba(255,255,255,.95);
   border-radius: 12px;
   padding:10px 12px;
-  box-shadow: var(--shadow2);
+  box-shadow: 0 6px 16px rgba(2,6,23,.08);
   width:min(420px, calc(100vw - 32px));
 }
 .toast strong{display:block; margin-bottom:4px}
