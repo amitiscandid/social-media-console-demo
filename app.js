@@ -2,7 +2,7 @@
   const $ = (sel, root=document) => root.querySelector(sel);
   const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 
-  const STORAGE_KEY = "sm_console_white_tabs_v1";
+  const STORAGE_KEY = "sm_console_v3";
   const now = () => Date.now();
   const minutes = (m) => m*60*1000;
 
@@ -13,15 +13,24 @@
     category: ["Refunds","Baggage","Bookings","Flight Experience","IROP","Ticketing","Care","Sales"],
     priority: ["Low","Medium","High","Critical"],
     dept: ["Refunds","Baggage","Ticketing","Care","Sales"],
-    status: ["New","In-Progress","Assigned to Department","Returned to SMT","Escalated","Closed"]
+    status: ["New – Unclassified","In-Progress","Assigned to Department","Returned to SMT","Escalated","Closed"],
+    users: ["Amit (Demo User)","Neha Sharma","Rahul Verma","Sana Khan","Dept Agent 1","Dept Agent 2"],
+    templates: [
+      "Hi {name}, thanks for reaching out. We’re checking and will update shortly.",
+      "Hi {name}, please share your PNR in DM so we can assist.",
+      "Hi {name}, we’ve forwarded this to the concerned team. We’ll revert soon.",
+      "Hi {name}, sorry for the inconvenience. We’re looking into it urgently."
+    ]
   };
 
   function seedData(){
-    const baseTime = now() - minutes(75);
-    const mk = (i, channel, state, dept=null) => {
-      const created = baseTime + minutes(i*5);
+    const baseTime = now() - minutes(180);
+    const mk = (i, channel) => {
+      const created = baseTime + minutes(i*8);
       const pri = ["Low","Medium","High","Critical"][i%4];
-      const slaMin = pri==="Critical" ? 10 : pri==="High" ? 15 : pri==="Medium" ? 30 : 60;
+      const slaMinSM = pri==="Critical" ? 10 : pri==="High" ? 15 : pri==="Medium" ? 30 : 60;
+      const slaMinDept = pri==="Critical" ? 15 : pri==="High" ? 30 : pri==="Medium" ? 60 : 120;
+
       const subject = [
         "Rescheduled flight, no update",
         "Refund not received",
@@ -31,6 +40,7 @@
         "Overbooking complaint",
         "IROP assistance required"
       ][i%7];
+
       const message = [
         "My flight got rescheduled and I didn’t get any update. Please help.",
         "I was promised a refund but it's still pending.",
@@ -41,62 +51,91 @@
         "Flight disrupted due to weather. Need rebooking."
       ][i%7];
 
-      const status = state==="BROWN" ? "New" :
-                     state==="GREEN" ? "In-Progress" :
-                     state==="YELLOW" ? "Assigned to Department" :
-                     state==="BLUE" ? "Returned to SMT" : "Closed";
+      const postId = "POST-" + (100000 + i);
+      const url = `https://social.example/${channel.toLowerCase()}/${postId}`;
 
-      const owner = state==="YELLOW" ? (dept||"Refunds")+" Queue" : channel+" Queue";
-
-      const c = {
-        id: "00012" + String(600+i),
+      return {
+        id: "00012" + String(900+i),
         channel,
         handle: ["@user_handle","@flyer99","@traveler_in","@foodie","@complaints","@pnr_help"][i%6],
+        customerName: ["Ravi","Priya","John","Meera","Sara","Mohit"][i%6],
         subject,
         message,
-        createdAt: created,
-        lastActivityAt: created + minutes(2),
+        originalPostUrl: url,
+        originalPostId: postId,
+        capturedAt: created,          // ingestion timestamp
+        createdAt: created,           // case created timestamp
+        lastActivityAt: created,      // used for sorting logic
+        lastCustomerActivityAt: created,
+        lastSmActivityAt: null,
+        lastDeptActivityAt: null,
         firstOpenedAt: null,
-        slaStartMode: "click",
-        slaMinutes: slaMin,
-        state,
-        status,
-        owner,
-        assignee: null,
-        type: state==="BROWN" ? null : enums.caseType[i%enums.caseType.length],
-        category: state==="BROWN" ? null : enums.category[i%enums.category.length],
-        priority: state==="BROWN" ? null : pri,
-        department: dept,
-        escalation: state==="BLUE" && i%2===0,
+
+        slaStartedAtSM: null,
+        slaMinutesSM: slaMinSM,
+        slaStartedAtDept: null,
+        slaMinutesDept: slaMinDept,
+
+        state: "BROWN",
+        status: "New – Unclassified",
+        lane: "SM", // SM or FORWARDED
+
+        ownerQueue: `${channel} Queue`,
+        assignedTo: null,
+
+        type: null,
+        category: null,
+        priority: null,
+        department: null,
+
+        escalation: false,
         closureCode: null,
         resolutionNotes: null,
-        deptUpdate: null,
-        thread: [{who:"Customer", text: message, at: created}]
-      };
 
-      if(state==="GREEN"){
-        c.thread.push({who:"SMT", text:"We’re checking. Please share your PNR in DM.", at: created+minutes(8)});
-      }
-      if(state==="YELLOW"){
-        c.thread.push({who:"SMT", text:`Forwarded to ${dept||"Refunds"} team.`, at: created+minutes(10)});
-      }
-      if(state==="BLUE"){
-        c.deptUpdate = {dept: dept||"Refunds", summary:"Update: processed; ETA 5–7 days.", at: created+minutes(30)};
-        c.thread.push({who:(dept||"Refunds")+" Team", text:"Checked and initiated action. ETA 5–7 days.", at: c.deptUpdate.at});
-      }
-      return c;
+        thread: [{who:"Customer", kind:"customer", text: message, at: created}]
+      };
     };
 
     const cases = [];
-    for(let i=0;i<14;i++){
-      const ch = enums.channels[i%4];
-      const st = (i%7===0) ? "BLUE" : (i%5===0 ? "YELLOW" : (i%3===0 ? "GREEN" : "BROWN"));
-      const dept = (st==="YELLOW"||st==="BLUE") ? enums.dept[i%enums.dept.length] : null;
-      cases.push(mk(i, ch, st, dept));
+    for(let i=0;i<16;i++){
+      cases.push(mk(i, enums.channels[i%enums.channels.length]));
     }
 
+    // Seed "attended" SM case (BLUE), then customer reply (YELLOW)
+    const c1 = cases[2];
+    c1.type="Query"; c1.category="Bookings"; c1.priority="Medium";
+    c1.state="BLUE"; c1.status="In-Progress"; c1.firstOpenedAt = c1.createdAt + minutes(4);
+    c1.slaStartedAtSM = c1.firstOpenedAt;
+    c1.lastSmActivityAt = c1.firstOpenedAt;
+    c1.thread.push({who:"SMT", kind:"sm", text:"We’re checking. Please share your PNR in DM.", at: c1.firstOpenedAt});
+    c1.lastActivityAt = c1.firstOpenedAt;
+
+    const tCust = c1.createdAt + minutes(36);
+    c1.state="YELLOW";
+    c1.thread.push({who:"Customer", kind:"customer", text:"PNR: AB12CD. Please update.", at: tCust});
+    c1.lastActivityAt = tCust;
+    c1.lastCustomerActivityAt = tCust;
+
+    // Seed forwarded case (VIOLET) then dept update (ORANGE)
+    const c2 = cases[5];
+    c2.type="Complaint"; c2.category="Refunds"; c2.priority="High"; c2.department="Refunds";
+    c2.state="VIOLET"; c2.status="Assigned to Department"; c2.lane="FORWARDED";
+    const tFwd = c2.createdAt + minutes(20);
+    c2.firstOpenedAt = c2.createdAt + minutes(6);
+    c2.slaStartedAtSM = c2.firstOpenedAt;
+    c2.lastSmActivityAt = tFwd;
+    c2.thread.push({who:"SMT", kind:"sm", text:"Forwarded to Refunds team.", at: tFwd});
+    c2.lastActivityAt = tFwd;
+
+    const tDept = c2.createdAt + minutes(70);
+    c2.slaStartedAtDept = tDept;
+    c2.lastDeptActivityAt = tDept;
+    c2.state="ORANGE";
+    c2.thread.push({who:"Refunds Team", kind:"dept", text:"Update: refund initiated. ETA 5–7 business days.", at: tDept});
+    c2.lastActivityAt = tDept;
+
     return {
-      version: 1,
+      version: 3,
       user: { role: "SMT", name: "Amit (Demo User)" },
       ui: {
         selectedChannel: "All",
@@ -105,12 +144,21 @@
         filterPriority: "All",
         filterSla: "All",
         filterCategory: "All",
-        dashboardTab: "New",
-        rightTab: "Updated",
         deptName: "Refunds",
+        notificationsOpen: false,
       },
       pageTabs: { active: "dashboard" },
       recordTabs: { activeId: null, items: [] },
+      notifications: [],
+      admin: {
+        campaigns: [
+          {id:"CMP-001", name:"Facebook Mentions", channel:"Facebook", assignedTo:"Amit (Demo User)"},
+          {id:"CMP-002", name:"Instagram Comments", channel:"Instagram", assignedTo:null},
+          {id:"CMP-003", name:"X/Twitter Mentions", channel:"X", assignedTo:"Neha Sharma"},
+          {id:"CMP-004", name:"LinkedIn Tags", channel:"LinkedIn", assignedTo:null},
+          {id:"CMP-005", name:"Support Email Ingest", channel:"Email", assignedTo:"Rahul Verma"},
+        ]
+      },
       cases
     };
   }
@@ -120,48 +168,31 @@
       const raw = localStorage.getItem(STORAGE_KEY);
       if(!raw) return seedData();
       const data = JSON.parse(raw);
-      if(!data || data.version !== 1) return seedData();
-      if(!data.pageTabs) data.pageTabs = {active:"dashboard"};
-      if(!data.recordTabs) data.recordTabs = {activeId:null, items:[]};
+      if(!data || data.version !== 3) return seedData();
+      data.notifications ||= [];
+      data.admin ||= seedData().admin;
       return data;
-    }catch(e){
-      return seedData();
-    }
+    }catch(e){ return seedData(); }
   }
-
   let store = load();
   function save(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(store)); }
 
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   }
-
-  function relTime(ts){
+  const relTime = (ts) => {
     const diff = now() - ts;
     const m = Math.max(0, Math.round(diff/60000));
     if(m < 60) return `${m}m ago`;
     const h = Math.round(m/60);
     return `${h}h ago`;
-  }
-
-  function fmtTime(ts){
+  };
+  const fmtTime = (ts) => {
     const d = new Date(ts);
     const hh = String(d.getHours()).padStart(2,'0');
     const mm = String(d.getMinutes()).padStart(2,'0');
     return `${hh}:${mm}`;
-  }
-
-  function slaRemaining(c){
-    const start = (c.slaStartMode === "click") ? (c.firstOpenedAt || null) : c.createdAt;
-    if(!start) return {label:"Not started", state:"ONTRACK", ms:null};
-    const due = start + minutes(c.slaMinutes);
-    const rem = due - now();
-    const breached = rem <= 0;
-    const minsLeft = Math.ceil(Math.abs(rem)/60000);
-    if(breached) return {label:`BREACHED (${minsLeft}m)`, state:"BREACHED", ms:rem};
-    if(minsLeft <= 3) return {label:`${minsLeft}m left`, state:"ATRISK", ms:rem};
-    return {label:`${minsLeft}m left`, state:"ONTRACK", ms:rem};
-  }
+  };
 
   function toast(msg, sub=""){
     const wrap = $(".toastWrap") || (() => {
@@ -177,68 +208,118 @@
     setTimeout(()=> { t.remove(); if(!wrap.children.length) wrap.remove(); }, 2600);
   }
 
+  function pushNotif(kind, title, details, caseId=null){
+    const n = { id: "N"+Math.random().toString(16).slice(2), at: now(), kind, title, details, caseId, read:false };
+    store.notifications.unshift(n);
+    save();
+  }
+
+  function unreadCount(){ return (store.notifications||[]).filter(n=>!n.read).length; }
+
   function stateBadgeClass(st){
-    if(st==="BROWN") return "brown";
-    if(st==="GREEN") return "green";
-    if(st==="YELLOW") return "yellow";
-    if(st==="BLUE") return "blue";
-    if(st==="CLOSED") return "closed";
-    return "";
+    return st==="BROWN"?"brown":
+           st==="BLUE"?"blue":
+           st==="YELLOW"?"yellow":
+           st==="VIOLET"?"violet":
+           st==="ORANGE"?"orange":
+           st==="CLOSED"?"closed":"";
+  }
+
+  // SLA per doc: starts when case is attended (opened). Manager: brown = SLA not triggered.
+  // Interpretation: SLA starts on first open by SMT/DEPT, and at that moment case becomes "attended".
+  function startSlaOnOpen(c){
+    if(!c.firstOpenedAt) c.firstOpenedAt = now();
+    if(!c.slaStartedAtSM && c.lane==="SM"){
+      c.slaStartedAtSM = c.firstOpenedAt;
+    }
+    if(c.state==="BROWN"){
+      // "attended" => BLUE
+      c.state = "BLUE";
+      c.status = "In-Progress";
+      c.lastSmActivityAt = c.firstOpenedAt;
+      c.lastActivityAt = c.firstOpenedAt;
+      pushNotif("case_attended","Case attended", `SMT opened ${c.id}.`, c.id);
+    }
+  }
+
+  function slaRemainingSM(c){
+    if(!c.slaStartedAtSM) return {label:"Not started", state:"NOTSTARTED", ms:null};
+    const due = c.slaStartedAtSM + minutes(c.slaMinutesSM);
+    const rem = due - now();
+    const breached = rem <= 0;
+    const minsLeft = Math.ceil(Math.abs(rem)/60000);
+    if(breached) return {label:`BREACHED (${minsLeft}m)`, state:"BREACHED", ms:rem};
+    if(minsLeft <= 3) return {label:`${minsLeft}m left`, state:"ATRISK", ms:rem};
+    return {label:`${minsLeft}m left`, state:"ONTRACK", ms:rem};
+  }
+  function slaRemainingDept(c){
+    if(!c.slaStartedAtDept) return {label:"Not started", state:"NOTSTARTED", ms:null};
+    const due = c.slaStartedAtDept + minutes(c.slaMinutesDept);
+    const rem = due - now();
+    const breached = rem <= 0;
+    const minsLeft = Math.ceil(Math.abs(rem)/60000);
+    if(breached) return {label:`BREACHED (${minsLeft}m)`, state:"BREACHED", ms:rem};
+    if(minsLeft <= 5) return {label:`${minsLeft}m left`, state:"ATRISK", ms:rem};
+    return {label:`${minsLeft}m left`, state:"ONTRACK", ms:rem};
+  }
+
+  function ownerLabel(c){
+    if(c.assignedTo) return c.assignedTo;
+    return c.ownerQueue;
   }
 
   function setActiveRecordTab(id){
     store.recordTabs.activeId = id;
-    save();
-    render();
+    save(); render();
   }
-
   function closeRecordTab(id){
     const tab = store.recordTabs.items.find(t=>t.id===id);
     if(!tab) return;
     if(tab.pinned) return toast("Pinned tab", "Unpin before closing.");
-    store.recordTabs.items = store.recordTabs.items.filter(t=>t.id !== id);
-    if(store.recordTabs.activeId === id){
+    store.recordTabs.items = store.recordTabs.items.filter(t=>t.id!==id);
+    if(store.recordTabs.activeId===id){
       store.recordTabs.activeId = store.recordTabs.items[0]?.id || null;
     }
-    save();
-    render();
+    save(); render();
   }
-
   function togglePinRecordTab(id){
     const tab = store.recordTabs.items.find(t=>t.id===id);
     if(!tab) return;
     tab.pinned = !tab.pinned;
-    save();
-    render();
+    save(); render();
   }
 
   function openCase(caseId){
     const c = store.cases.find(x=>x.id===caseId);
     if(!c) return;
+
     const existing = store.recordTabs.items.find(t=>t.key===caseId);
-    if(existing){
-      setActiveRecordTab(existing.id);
-      return;
-    }
+    if(existing){ setActiveRecordTab(existing.id); return; }
+
     const id = "case_" + caseId;
     store.recordTabs.items.push({id, key: caseId, label:`Case ${caseId}`, pinned:false});
     store.recordTabs.activeId = id;
-    save();
-    render();
 
-    if(!c.firstOpenedAt){
-      c.firstOpenedAt = now();
-      c.lastActivityAt = now();
-      save();
-      toast("SLA started", `Case ${c.id} started on first open.`);
-      render();
+    // SLA + attended behavior
+    if(store.user.role==="SMT") startSlaOnOpen(c);
+    if(store.user.role==="DEPT" && c.lane==="FORWARDED" && !c.slaStartedAtDept){
+      c.slaStartedAtDept = now();
+      c.lastDeptActivityAt = c.slaStartedAtDept;
     }
+
+    save(); render();
   }
 
   function setActivePage(pageKey){
     store.pageTabs.active = pageKey;
-    save();
-    render();
+    save(); render();
+  }
+
+  function applyCampaignOwners(){
+    const cmps = store.admin?.campaigns || [];
+    const map = new Map();
+    cmps.forEach(c => { if(c.assignedTo) map.set(c.channel, c.assignedTo); });
+    store.cases.forEach(cs => { cs.assignedTo = map.get(cs.channel) || null; });
   }
 
   function getFilteredCases(){
@@ -258,8 +339,13 @@
       cases = cases.filter(c => (c.category || "—") === ui.filterCategory);
     }
     if(ui.filterSla && ui.filterSla !== "All"){
-      cases = cases.filter(c => slaRemaining(c).state === ui.filterSla);
+      const match = (c) => {
+        const s = c.lane==="FORWARDED" ? slaRemainingDept(c) : slaRemainingSM(c);
+        return s.state === ui.filterSla;
+      };
+      cases = cases.filter(match);
     }
+
     const q = (ui.search || "").trim().toLowerCase();
     if(q){
       cases = cases.filter(c => (
@@ -270,6 +356,32 @@
       ));
     }
     return cases;
+  }
+
+  function sortSm(cases){
+    // Manager rule: unattended stay brown; once SM acts -> BLUE should sink; customer reply -> YELLOW rises.
+    const group = (c) => (c.state==="YELLOW") ? 0 : (c.state==="BROWN") ? 1 : 2; // BLUE last
+    return cases.slice().sort((a,b)=>{
+      const ga=group(a), gb=group(b);
+      if(ga!==gb) return ga-gb;
+      if(ga===0) return (b.lastCustomerActivityAt||0) - (a.lastCustomerActivityAt||0); // newest customer reply first
+      if(ga===1) return (b.createdAt||0) - (a.createdAt||0); // newest unattended first
+      // BLUE bottom: oldest last activity first, to "drop down"
+      return (a.lastActivityAt||0) - (b.lastActivityAt||0);
+    });
+  }
+
+  function sortForwarded(cases){
+    // ORANGE top (internal dept update), then YELLOW (customer reply while forwarded), then VIOLET bottom.
+    const group = (c) => (c.state==="ORANGE") ? 0 : (c.state==="YELLOW") ? 1 : 2; // VIOLET last
+    return cases.slice().sort((a,b)=>{
+      const ga=group(a), gb=group(b);
+      if(ga!==gb) return ga-gb;
+      if(ga===0) return (b.lastDeptActivityAt||0) - (a.lastDeptActivityAt||0);
+      if(ga===1) return (b.lastCustomerActivityAt||0) - (a.lastCustomerActivityAt||0);
+      // VIOLET bottom: oldest forward first
+      return (a.lastActivityAt||0) - (b.lastActivityAt||0);
+    });
   }
 
   function filterSelect(label, id, options, value){
@@ -291,37 +403,24 @@
     `;
   }
 
-  function renderCaseCard(c){
-    const sla = slaRemaining(c);
+  function renderCaseCard(c, lane="SM"){
+    const sla = lane==="FORWARDED" ? slaRemainingDept(c) : slaRemainingSM(c);
     const slaClass = sla.state==="BREACHED" ? "bad" : (sla.state==="ATRISK" ? "warn" : "");
+    const last = lane==="FORWARDED" ? relTime(c.lastActivityAt) : relTime(c.lastActivityAt);
     return `
       <div class="caseCard" data-open-case="${escapeHtml(c.id)}">
         <div class="caseTop">
           <div class="badge ${stateBadgeClass(c.state)}">${escapeHtml(c.state)}</div>
-          <div class="slaPill ${slaClass}">${escapeHtml(sla.label)}</div>
+          <div class="slaPill ${slaClass}">${escapeHtml(sla.label)} • ${escapeHtml(last)}</div>
         </div>
         <div class="caseTitle">${escapeHtml(c.handle)} • ${escapeHtml(c.subject)}</div>
         <div class="caseMeta">
           <span>Case: ${escapeHtml(c.id)}</span>
           <span>Channel: ${escapeHtml(c.channel)}</span>
           <span>Status: ${escapeHtml(c.status)}</span>
+          <span>Owner: ${escapeHtml(ownerLabel(c))}</span>
           <span>Priority: ${escapeHtml(c.priority || "—")}</span>
-          <span>Dept: ${escapeHtml(c.department || "—")}</span>
         </div>
-      </div>
-    `;
-  }
-
-  function renderCaseCardCompact(c){
-    const msg = c.deptUpdate ? c.deptUpdate.summary : c.message;
-    return `
-      <div class="caseCard" data-open-case="${escapeHtml(c.id)}">
-        <div class="caseTop">
-          <div class="badge ${stateBadgeClass(c.state)}">${escapeHtml(c.state)}</div>
-          <div class="slaPill">${escapeHtml(relTime(c.lastActivityAt))}</div>
-        </div>
-        <div class="caseTitle">${escapeHtml(c.id)} • ${escapeHtml(c.department || c.channel)}</div>
-        <div class="caseMeta"><span>${escapeHtml(msg)}</span></div>
       </div>
     `;
   }
@@ -330,16 +429,8 @@
     const ui = store.ui;
     const all = getFilteredCases();
 
-    const tab = ui.dashboardTab || "New";
-    const smCases = all.filter(c => {
-      if(tab==="New") return c.state==="BROWN";
-      if(tab==="In-Progress") return c.state==="GREEN";
-      if(tab==="Mine") return c.assignee === store.user.name;
-      return true;
-    });
-
-    const rightTab = ui.rightTab || "Updated";
-    const rightCases = all.filter(c => rightTab==="Updated" ? c.state==="BLUE" : c.state==="YELLOW");
+    const smCases = sortSm(all.filter(c => c.lane==="SM" && ["BROWN","BLUE","YELLOW"].includes(c.state)));
+    const fwdCases = sortForwarded(all.filter(c => c.lane==="FORWARDED" && ["VIOLET","YELLOW","ORANGE"].includes(c.state)));
 
     const channels = ["All"].concat(enums.channels);
 
@@ -347,12 +438,12 @@
       <div class="container">
         <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap">
           <div>
-            <div class="h1">Dashboard</div>
-            <div class="muted">Click any case to open a record tab (console behavior).</div>
+            <div class="h1">Social Media Dashboard</div>
+            <div class="muted">Aligned with doc: omnichannel capture → Case → classify → route → close. Sorting/Colors match manager rules.</div>
           </div>
           <div style="display:flex; gap:10px; flex-wrap:wrap">
             <button class="btn" id="newCaseBtn">+ New Dummy Case</button>
-            <button class="btn primary" data-open-page="sla">Open SLA</button>
+            <button class="btn primary" data-open-page="sla">SLA & Escalations</button>
           </div>
         </div>
 
@@ -364,7 +455,7 @@
             ${filterSelect("Channel","channelSel", channels, ui.selectedChannel || "All")}
             ${filterSelect("Status","statusSel", ["All"].concat(enums.status.filter(s=>s!=="Closed")), ui.filterStatus || "All")}
             ${filterSelect("Priority","prioritySel", ["All"].concat(enums.priority), ui.filterPriority || "All")}
-            ${filterSelect("SLA","slaSel", ["All","ONTRACK","ATRISK","BREACHED"], ui.filterSla || "All")}
+            ${filterSelect("SLA","slaSel", ["All","ONTRACK","ATRISK","BREACHED","NOTSTARTED"], ui.filterSla || "All")}
             ${filterSelect("Category","categorySel", ["All"].concat(enums.category), ui.filterCategory || "All")}
             ${filterText("Search","searchTxt", ui.search || "", "id / handle / subject / text")}
           </div>
@@ -383,27 +474,34 @@
               `).join("")}
             </div>
             <hr class="sep"/>
-            <div class="small">Shortcuts: <span class="kbd">Ctrl</span>+<span class="kbd">K</span> focuses search. Record tabs: <span class="kbd">Ctrl</span>+<span class="kbd">W</span> close.</div>
+            <div class="small">
+              Color rules:
+              <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap">
+                <span class="badge brown">BROWN</span>
+                <span class="badge blue">BLUE</span>
+                <span class="badge yellow">YELLOW</span>
+                <span class="badge violet">VIOLET</span>
+                <span class="badge orange">ORANGE</span>
+              </div>
+              <div class="small muted" style="margin-top:8px">Shortcuts: <span class="kbd">Ctrl</span>+<span class="kbd">K</span> search • <span class="kbd">Ctrl</span>+<span class="kbd">W</span> close tab</div>
+            </div>
           </div>
 
           <div class="card pad">
             <div style="font-weight:950">SM Case List</div>
-            <div class="tabs" id="dashTabs">
-              ${["New","In-Progress","Mine"].map(t => `<div class="tab ${t===tab?'active':''}" data-tab="${t}">${t}</div>`).join("")}
-            </div>
+            <div class="small muted">Order: YELLOW (customer replied) → BROWN (unattended) → BLUE (in-progress, sinks)</div>
+            <div style="height:10px"></div>
             <div class="list" id="caseList">
-              ${smCases.length ? smCases.slice(0,24).map(renderCaseCard).join("") : `<div class="small muted">No cases match filters.</div>`}
+              ${smCases.length ? smCases.slice(0,24).map(c=>renderCaseCard(c,"SM")).join("") : `<div class="small muted">No cases match filters.</div>`}
             </div>
-            ${smCases.length>24 ? `<div class="small muted" style="margin-top:10px">Showing 24 of ${smCases.length} matching cases.</div>` : ``}
           </div>
 
           <div class="card pad">
             <div style="font-weight:950">Forwarded / Updated</div>
-            <div class="tabs" id="rightTabs">
-              ${["Updated","Forwarded"].map(t => `<div class="tab ${t===rightTab?'active':''}" data-righttab="${t}">${t}</div>`).join("")}
-            </div>
+            <div class="small muted">Order: ORANGE (dept update) → YELLOW (customer during forwarded) → VIOLET (awaiting)</div>
+            <div style="height:10px"></div>
             <div class="list" id="rightList">
-              ${rightCases.length ? rightCases.slice(0,24).map(renderCaseCardCompact).join("") : `<div class="small muted">No cases.</div>`}
+              ${fwdCases.length ? fwdCases.slice(0,24).map(c=>renderCaseCard(c,"FORWARDED")).join("") : `<div class="small muted">No forwarded/updated cases.</div>`}
             </div>
           </div>
         </div>
@@ -414,17 +512,17 @@
   function renderDeptQueue(){
     const dept = store.ui.deptName || "Refunds";
     const all = getFilteredCases();
-    const deptCases = all.filter(c => c.state==="YELLOW" && (c.department || "Refunds") === dept);
+    const deptCases = sortForwarded(all.filter(c => c.lane==="FORWARDED" && (c.department||"Refunds")===dept));
 
     return `
       <div class="container">
         <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap">
           <div>
             <div class="h1">Department Queue • ${escapeHtml(dept)}</div>
-            <div class="muted">Open a forwarded case → it becomes a record tab.</div>
+            <div class="muted">Dept can add investigation update (ORANGE) and close (with notes).</div>
           </div>
           <div style="display:flex; gap:10px; flex-wrap:wrap">
-            <button class="btn" data-open-page="dashboard">Back to Dashboard</button>
+            <button class="btn" data-open-page="dashboard">Back</button>
           </div>
         </div>
 
@@ -432,68 +530,62 @@
 
         <div class="grid2">
           <div class="card pad">
-            <div style="font-weight:950">${escapeHtml(dept)} Queue</div>
-            <div class="small muted" style="margin-bottom:10px">Forwarded cases (yellow).</div>
+            <div style="font-weight:950">${escapeHtml(dept)} Cases</div>
+            <div class="small muted" style="margin-bottom:10px">Click a case to open it.</div>
             <div class="list">
               ${deptCases.length ? deptCases.map(c => `
                 <div class="listItem" data-open-case="${c.id}">
                   <strong>${escapeHtml(c.id)}</strong> • ${escapeHtml(c.subject)}
-                  <div class="small muted">From ${escapeHtml(c.channel)} • ${escapeHtml(relTime(c.createdAt))}</div>
+                  <div class="small muted">State ${escapeHtml(c.state)} • ${escapeHtml(relTime(c.lastActivityAt))}</div>
                 </div>
-              `).join("") : `<div class="small muted">No forwarded cases for this dept.</div>`}
+              `).join("") : `<div class="small muted">No cases for this department.</div>`}
             </div>
           </div>
 
           <div class="card pad">
-            <div style="font-weight:950">Quick Guide</div>
+            <div style="font-weight:950">Department rules</div>
             <div class="small">
-              <ol>
-                <li>Open case → record tab.</li>
-                <li>As DEPT role: add update → case turns BLUE.</li>
-                <li>Closing as DEPT requires Closure Code + Resolution Notes.</li>
-              </ol>
+              <ul>
+                <li>Open a VIOLET case → Dept SLA starts.</li>
+                <li>Add update → case becomes ORANGE and climbs to top for SMT.</li>
+                <li>Customer replies while forwarded → stays forwarded and becomes YELLOW.</li>
+                <li>Dept close requires Resolution Notes + Closure Code.</li>
+              </ul>
             </div>
             <hr class="sep"/>
-            <div class="small muted">Role now: <strong>${escapeHtml(store.user.role)}</strong>. Change role from top right.</div>
+            <div class="small muted">Role now: <strong>${escapeHtml(store.user.role)}</strong> (switch top right).</div>
           </div>
         </div>
       </div>
     `;
   }
 
-  function averageFirstOpen(cases){
-    const opened = cases.filter(c => c.firstOpenedAt);
-    if(!opened.length) return "—";
-    const avg = opened.reduce((acc,c)=> acc + (c.firstOpenedAt - c.createdAt), 0) / opened.length;
-    const mins = Math.max(0, Math.round(avg/60000));
-    return `${mins}m`;
-  }
-
   function renderSla(){
     const active = store.cases.filter(c => c.status !== "Closed");
     const stats = {ONTRACK:0, ATRISK:0, BREACHED:0, NOTSTARTED:0};
     active.forEach(c => {
-      const s = slaRemaining(c);
-      if(s.label==="Not started") stats.NOTSTARTED++;
-      else stats[s.state]++;
+      const s = c.lane==="FORWARDED" ? slaRemainingDept(c) : slaRemainingSM(c);
+      stats[s.state] = (stats[s.state]||0) + 1;
     });
 
     const rows = active
       .slice()
-      .sort((a,b)=> (slaRemaining(a).ms ?? 1e15) - (slaRemaining(b).ms ?? 1e15))
+      .sort((a,b)=>{
+        const sa = a.lane==="FORWARDED" ? slaRemainingDept(a).ms : slaRemainingSM(a).ms;
+        const sb = b.lane==="FORWARDED" ? slaRemainingDept(b).ms : slaRemainingSM(b).ms;
+        return (sa ?? 1e15) - (sb ?? 1e15);
+      })
       .slice(0,25);
-
-    const avgFirst = averageFirstOpen(active);
 
     return `
       <div class="container">
         <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap">
           <div>
             <div class="h1">SLA & Escalations</div>
-            <div class="muted">Rows clickable → open as record tab.</div>
+            <div class="muted">Visual indicators: ONTRACK / ATRISK / BREACHED. Breach generates notification.</div>
           </div>
           <div style="display:flex; gap:10px; flex-wrap:wrap">
-            <button class="btn" data-open-page="dashboard">Back to Dashboard</button>
+            <button class="btn" data-open-page="dashboard">Back</button>
           </div>
         </div>
 
@@ -502,31 +594,26 @@
         <div class="grid2">
           <div class="card pad">
             <div style="font-weight:950">KPIs</div>
-            <div class="small muted">Counts across active cases.</div>
-            <div style="height:10px"></div>
-            <div class="list">
-              <div class="listItem" style="cursor:default"><strong>On Track</strong> — ${stats.ONTRACK}</div>
-              <div class="listItem" style="cursor:default"><strong>At Risk</strong> — ${stats.ATRISK}</div>
-              <div class="listItem" style="cursor:default"><strong>Breached</strong> — ${stats.BREACHED}</div>
-              <div class="listItem" style="cursor:default"><strong>Not Started</strong> — ${stats.NOTSTARTED}</div>
-              <div class="listItem" style="cursor:default"><strong>Avg First Open</strong> — ${avgFirst}</div>
+            <div class="list" style="margin-top:10px">
+              <div class="listItem" style="cursor:default"><strong>On Track</strong> — ${stats.ONTRACK||0}</div>
+              <div class="listItem" style="cursor:default"><strong>At Risk</strong> — ${stats.ATRISK||0}</div>
+              <div class="listItem" style="cursor:default"><strong>Breached</strong> — ${stats.BREACHED||0}</div>
+              <div class="listItem" style="cursor:default"><strong>Not Started</strong> — ${stats.NOTSTARTED||0}</div>
             </div>
           </div>
 
           <div class="card pad">
             <div style="font-weight:950">Worst SLA (Top 25)</div>
             <table style="margin-top:10px">
-              <thead><tr><th>Case</th><th>Channel</th><th>Status</th><th>SLA</th><th>Opened</th></tr></thead>
+              <thead><tr><th>Case</th><th>Lane</th><th>State</th><th>SLA</th></tr></thead>
               <tbody>
                 ${rows.map(c => {
-                  const s = slaRemaining(c);
-                  const opened = c.firstOpenedAt ? relTime(c.firstOpenedAt) : "—";
+                  const s = c.lane==="FORWARDED" ? slaRemainingDept(c) : slaRemainingSM(c);
                   return `<tr class="trClick" data-open-case="${escapeHtml(c.id)}">
                     <td>${escapeHtml(c.id)}</td>
-                    <td>${escapeHtml(c.channel)}</td>
-                    <td>${escapeHtml(c.status)}</td>
+                    <td>${escapeHtml(c.lane)}</td>
+                    <td>${escapeHtml(c.state)}</td>
                     <td>${escapeHtml(s.label)}</td>
-                    <td>${escapeHtml(opened)}</td>
                   </tr>`;
                 }).join("")}
               </tbody>
@@ -537,37 +624,35 @@
     `;
   }
 
-  function renderAdmin(){
+  function renderReports(){
+    const active = store.cases.filter(c=>c.status!=="Closed");
+    const byChannel = {};
+    active.forEach(c => byChannel[c.channel] = (byChannel[c.channel]||0) + 1);
+    const rows = Object.entries(byChannel).sort((a,b)=>b[1]-a[1]);
+
     return `
       <div class="container">
-        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap">
-          <div>
-            <div class="h1">Admin Config</div>
-            <div class="muted">Demo-only. Reset clears localStorage.</div>
-          </div>
-          <div style="display:flex; gap:10px; flex-wrap:wrap">
-            <button class="btn danger" id="resetBtn">Reset Demo Data</button>
-          </div>
-        </div>
-
+        <div class="h1">Reports</div>
+        <div class="muted">High-level metrics for management. (Demo data)</div>
         <div style="height:12px"></div>
 
         <div class="grid2">
           <div class="card pad">
-            <div style="font-weight:950">Channel → Queue Mapping</div>
+            <div style="font-weight:950">Cases by Channel</div>
             <table style="margin-top:10px">
-              <thead><tr><th>Channel</th><th>Queue</th><th>Owner</th></tr></thead>
+              <thead><tr><th>Channel</th><th>Active Cases</th></tr></thead>
               <tbody>
-                ${enums.channels.map(ch => `<tr><td>${escapeHtml(ch)}</td><td>${escapeHtml(ch)} Queue</td><td>${escapeHtml(ch)} Social Queue</td></tr>`).join("")}
+                ${rows.map(([ch,count])=> `<tr><td>${escapeHtml(ch)}</td><td>${count}</td></tr>`).join("")}
               </tbody>
             </table>
           </div>
-
           <div class="card pad">
-            <div style="font-weight:950">Notes</div>
+            <div style="font-weight:950">Lifecycle (from doc)</div>
+            <div class="small" style="margin-top:8px">
+              New – Unclassified → In-Progress → Assigned to Department → Returned to SMT → Escalated → Closed
+            </div>
             <div class="callout">
-              <strong>Click-to-start SLA is gameable.</strong><br/>
-              In real build, store both: Created SLA and First Open metric.
+              This is a UI prototype. In Salesforce, these would map to Case fields, queues, and permission sets.
             </div>
           </div>
         </div>
@@ -575,14 +660,67 @@
     `;
   }
 
-  function selectRow(label, id, options, value){
-    const v = value || "";
+  function renderAdmin(){
+    const campaigns = store.admin.campaigns || [];
     return `
-      <label class="small" style="display:block; margin:10px 0 6px">${escapeHtml(label)}</label>
-      <select id="${id}">
-        <option value="">—</option>
-        ${options.map(o => `<option value="${escapeHtml(o)}" ${o===v?'selected':''}>${escapeHtml(o)}</option>`).join("")}
-      </select>
+      <div class="container">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap">
+          <div>
+            <div class="h1">Admin</div>
+            <div class="muted">Assign/remove/reassign users for campaigns. Owner label updates across dashboard.</div>
+          </div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap">
+            <button class="btn" id="resetBtn">Reset Demo Data</button>
+          </div>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="grid2">
+          <div class="card pad">
+            <div style="font-weight:950">Campaign User Assignment</div>
+            <div class="small muted">This implements manager feedback: not always queue owner.</div>
+
+            <table style="margin-top:10px">
+              <thead><tr><th>Campaign</th><th>Channel</th><th>Assigned User</th><th>Actions</th></tr></thead>
+              <tbody>
+                ${campaigns.map(cmp => `
+                  <tr>
+                    <td><strong>${escapeHtml(cmp.id)}</strong> • ${escapeHtml(cmp.name)}</td>
+                    <td>${escapeHtml(cmp.channel)}</td>
+                    <td>${escapeHtml(cmp.assignedTo || "—")}</td>
+                    <td style="width:360px">
+                      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+                        <select data-cmp-sel="${escapeHtml(cmp.id)}" style="width:240px; padding:8px 10px">
+                          <option value="">— Unassigned —</option>
+                          ${enums.users.map(u => `<option value="${escapeHtml(u)}" ${u===cmp.assignedTo?'selected':''}>${escapeHtml(u)}</option>`).join("")}
+                        </select>
+                        <button class="btn primary" data-cmp-assign="${escapeHtml(cmp.id)}">Save</button>
+                        <button class="btn" data-cmp-remove="${escapeHtml(cmp.id)}">Remove</button>
+                      </div>
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+
+            <hr class="sep"/>
+            <div class="small muted">
+              Demo mapping: Campaign.channel → Case.channel. In real Salesforce: Custom Metadata / Assignment Rules / Omni-Channel routing.
+            </div>
+          </div>
+
+          <div class="card pad">
+            <div style="font-weight:950">Notifications & SLA</div>
+            <div class="small">
+              <ul>
+                <li>Bell icon shows SLA breaches, dept updates, customer replies.</li>
+                <li>Supervisor role can view SLA tab and dashboards.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
     `;
   }
 
@@ -590,24 +728,17 @@
     const c = store.cases.find(x=>x.id===caseId);
     if(!c) return `<div class="container"><div class="card pad"><div class="h1">Case not found</div></div></div>`;
 
-    if(!c.firstOpenedAt){
-      c.firstOpenedAt = now();
-      c.lastActivityAt = now();
-      save();
-      toast("SLA started", `Case ${c.id} started on first open.`);
-    }
-
     const role = store.user.role;
     const isSMT = role==="SMT";
     const isDept = role==="DEPT";
-    const classificationValid = !!(c.type && c.category && c.priority);
 
-    const sla = slaRemaining(c);
+    const sla = c.lane==="FORWARDED" ? slaRemainingDept(c) : slaRemainingSM(c);
     const slaClass = sla.state==="BREACHED" ? "bad" : (sla.state==="ATRISK" ? "warn" : "");
-    const deptBanner = c.deptUpdate ? `
+
+    const internalBanner = (c.state==="ORANGE") ? `
       <div class="banner">
-        <div class="bannerTitle">Dept Update • ${escapeHtml(c.deptUpdate.dept)}</div>
-        <div class="bannerSub">${escapeHtml(c.deptUpdate.summary)} • ${escapeHtml(relTime(c.deptUpdate.at))}</div>
+        <div class="bannerTitle">Internal Department Update Received</div>
+        <div class="bannerSub">Per manager rule: case is ORANGE and should climb to top for SMT action.</div>
       </div>` : "";
 
     return `
@@ -616,33 +747,41 @@
           <div>
             <div class="h1">Case ${escapeHtml(c.id)} • ${escapeHtml(c.channel)} • ${escapeHtml(c.handle)}</div>
             <div class="hl">
+              <div class="hlItem">State: <span class="badge ${stateBadgeClass(c.state)}">${escapeHtml(c.state)}</span></div>
               <div class="hlItem">Status: <strong>${escapeHtml(c.status)}</strong></div>
-              <div class="hlItem">Owner: <strong>${escapeHtml(c.owner)}</strong></div>
-              <div class="hlItem">Created: <strong>${escapeHtml(relTime(c.createdAt))}</strong></div>
-              <div class="hlItem">Opened: <strong>${escapeHtml(c.firstOpenedAt ? relTime(c.firstOpenedAt) : "—")}</strong></div>
-              <div class="hlItem">Priority: <strong>${escapeHtml(c.priority || "—")}</strong></div>
-              <div class="hlItem">Dept: <strong>${escapeHtml(c.department || "—")}</strong></div>
+              <div class="hlItem">Lane: <strong>${escapeHtml(c.lane)}</strong></div>
+              <div class="hlItem">Owner: <strong>${escapeHtml(ownerLabel(c))}</strong></div>
+              <div class="hlItem">Captured: <strong>${escapeHtml(relTime(c.capturedAt))}</strong></div>
               <div class="hlItem"><span class="slaPill ${slaClass}" style="display:inline-block">SLA: <strong>${escapeHtml(sla.label)}</strong></span></div>
-              <div class="hlItem"><span class="badge ${stateBadgeClass(c.state)}">${escapeHtml(c.state)}</span></div>
             </div>
           </div>
           <div style="display:flex; gap:10px; flex-wrap:wrap">
+            <button class="btn" id="simCustomerBtn">Simulate Customer Reply</button>
             <button class="btn" id="copyBtn">Copy Case ID</button>
-            <button class="btn" id="backDashBtn">Back to Dashboard</button>
+            <button class="btn" id="backDashBtn">Back</button>
           </div>
         </div>
 
         <div style="height:12px"></div>
-        ${deptBanner}
+        ${internalBanner}
 
         <div class="grid2">
           <div class="card pad">
-            <div style="font-weight:950">Social Thread</div>
+            <div style="font-weight:950">Original Post / Capture Metadata</div>
+            <div class="small muted" style="margin-top:6px">Link is a placeholder to demonstrate the requirement: “link to original post”.</div>
+            <div class="small" style="margin-top:8px">
+              <div><strong>Post ID:</strong> ${escapeHtml(c.originalPostId)}</div>
+              <div><strong>URL:</strong> <a href="${escapeHtml(c.originalPostUrl)}" target="_blank" rel="noopener">${escapeHtml(c.originalPostUrl)}</a></div>
+              <div><strong>Handle:</strong> ${escapeHtml(c.handle)} • <strong>Name:</strong> ${escapeHtml(c.customerName)}</div>
+            </div>
+            <hr class="sep"/>
+
+            <div style="font-weight:950">Conversation</div>
             <hr class="sep"/>
 
             ${c.thread.map(item => `
               <div class="threadItem">
-                <div class="who">${escapeHtml(item.who)}</div>
+                <div class="who">${escapeHtml(item.who)} ${item.kind==="dept" ? "• Internal" : ""}</div>
                 <div style="margin-top:6px">${escapeHtml(item.text)}</div>
                 <div class="when">${escapeHtml(fmtTime(item.at))} • ${escapeHtml(relTime(item.at))}</div>
               </div>
@@ -650,32 +789,58 @@
 
             <hr class="sep"/>
             <div style="font-weight:950">Compose</div>
-            <textarea id="msgTxt" placeholder="${isSMT ? "Type reply to customer…" : isDept ? "Type dept update…" : "View only"}" ${(!isSMT && !isDept) ? "disabled" : ""}></textarea>
+
+            ${isSMT ? `
+              <label class="small" style="display:block; margin:10px 0 6px">Reply Template</label>
+              <select id="tplSel">
+                <option value="">— Select template —</option>
+                ${enums.templates.map((t,i)=>`<option value="${i}">${escapeHtml(t.replace("{name}", c.customerName))}</option>`).join("")}
+              </select>
+            ` : ``}
+
+            <textarea id="msgTxt" placeholder="${isSMT ? "SMT reply to customer…" : isDept ? "Dept internal update…" : "View only"}" ${(!isSMT && !isDept) ? "disabled" : ""}></textarea>
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px">
-              <button class="btn primary" id="sendBtn" ${(!isSMT && !isDept) ? "disabled" : ""}>${isSMT ? "Send Reply" : "Add Update"}</button>
+              <button class="btn primary" id="sendBtn" ${(!isSMT && !isDept) ? "disabled" : ""}>${isSMT ? "Send Reply" : "Add Internal Update"}</button>
               <button class="btn" id="noteBtn" ${(!isSMT && !isDept) ? "disabled" : ""}>Add Internal Note</button>
             </div>
-
-            ${(!classificationValid && isSMT) ? `<div class="callout"><strong>Blocked:</strong> classify before replying/routing/closing.</div>` : ``}
           </div>
 
           <div class="card pad">
             <div style="font-weight:950">Classification</div>
 
-            ${selectRow("Case Type*","typeSel", enums.caseType, c.type)}
-            ${selectRow("Category*","catSel", enums.category, c.category)}
-            ${selectRow("Priority*","priSel", enums.priority, c.priority)}
-            ${selectRow("Department","deptSel", ["—"].concat(enums.dept), c.department || "—")}
+            <label class="small" style="display:block; margin:10px 0 6px">Case Type</label>
+            <select id="typeSel">
+              <option value="">—</option>
+              ${enums.caseType.map(o => `<option value="${escapeHtml(o)}" ${o===(c.type||"")?'selected':''}>${escapeHtml(o)}</option>`).join("")}
+            </select>
+
+            <label class="small" style="display:block; margin:10px 0 6px">Category</label>
+            <select id="catSel">
+              <option value="">—</option>
+              ${enums.category.map(o => `<option value="${escapeHtml(o)}" ${o===(c.category||"")?'selected':''}>${escapeHtml(o)}</option>`).join("")}
+            </select>
+
+            <label class="small" style="display:block; margin:10px 0 6px">Priority</label>
+            <select id="priSel">
+              <option value="">—</option>
+              ${enums.priority.map(o => `<option value="${escapeHtml(o)}" ${o===(c.priority||"")?'selected':''}>${escapeHtml(o)}</option>`).join("")}
+            </select>
+
+            <label class="small" style="display:block; margin:10px 0 6px">Department (if forwarding)</label>
+            <select id="deptSel">
+              <option value="">—</option>
+              ${enums.dept.map(o => `<option value="${escapeHtml(o)}" ${o===(c.department||"")?'selected':''}>${escapeHtml(o)}</option>`).join("")}
+            </select>
 
             <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px">
               <button class="btn" id="saveClassBtn">Save</button>
-              <button class="btn primary" id="routeBtn" ${(!isSMT || !classificationValid) ? "disabled" : ""}>Route to Dept</button>
+              <button class="btn primary" id="routeBtn" ${(!isSMT) ? "disabled" : ""}>Forward to Dept</button>
               <button class="btn" id="escalateBtn" ${(!isSMT) ? "disabled" : ""}>Escalate</button>
-              <button class="btn danger" id="closeBtn" ${((isSMT && !classificationValid) || (!isSMT && !isDept)) ? "disabled" : ""}>Close</button>
+              <button class="btn danger" id="closeBtn" ${((!isSMT && !isDept)) ? "disabled" : ""}>Close</button>
             </div>
 
             <hr class="sep"/>
-            <div style="font-weight:950">Dept Close Requirements</div>
+            <div style="font-weight:950">Close (Dept requires notes)</div>
             <label class="small" style="display:block; margin:10px 0 6px">Resolution Notes ${isDept ? "*" : ""}</label>
             <textarea id="resNotes" ${isDept ? "" : "disabled"} placeholder="Required for Dept close…">${escapeHtml(c.resolutionNotes || "")}</textarea>
 
@@ -694,6 +859,7 @@
       {key:"dashboard", label:"Dashboard", icon:"D"},
       {key:"deptQueue", label:"Dept Queue", icon:"Q"},
       {key:"sla", label:"SLA", icon:"S"},
+      {key:"reports", label:"Reports", icon:"R"},
       {key:"admin", label:"Admin", icon:"A"}
     ];
     return `
@@ -721,7 +887,7 @@
         <div class="recordStrip">
           ${items.map(t => {
             const c = store.cases.find(x=>x.id===t.key);
-            const meta = c ? c.channel : "Case";
+            const meta = c ? `${c.channel} • ${c.state}` : "Case";
             const active = t.id===activeId ? "active" : "";
             const pinned = t.pinned ? "pinned" : "";
             const closeBtn = t.pinned ? "" : `<div class="x" data-rt-close="${escapeHtml(t.id)}" title="Close">✕</div>`;
@@ -740,9 +906,43 @@
     `;
   }
 
+  function renderNotificationsDrawer(){
+    const items = store.notifications || [];
+    const unread = unreadCount();
+    return `
+      <div class="drawerOverlay" id="drawerOverlay"></div>
+      <div class="drawer" role="dialog" aria-label="Notifications">
+        <div class="drawerHead">
+          <div>
+            <div style="font-weight:950">Notifications</div>
+            <div class="small muted">${unread} unread • newest first</div>
+          </div>
+          <div style="display:flex; gap:8px">
+            <button class="btn" id="markAllReadBtn">Mark all read</button>
+            <button class="btn" id="closeDrawerBtn">Close</button>
+          </div>
+        </div>
+        <div class="drawerBody">
+          ${items.length ? items.map(n => `
+            <div class="drawerItem" data-notif="${escapeHtml(n.id)}">
+              <strong>${escapeHtml(n.title)} ${n.read ? "" : "•"}</strong>
+              <div class="small muted" style="margin-top:4px">${escapeHtml(relTime(n.at))}</div>
+              <div style="margin-top:6px">${escapeHtml(n.details)}</div>
+              ${n.caseId ? `<div class="small" style="margin-top:6px"><a href="javascript:void(0)" data-open-case="${escapeHtml(n.caseId)}">Open case ${escapeHtml(n.caseId)}</a></div>` : ""}
+            </div>
+          `).join("") : `<div class="small muted">No notifications yet.</div>`}
+        </div>
+      </div>
+    `;
+  }
+
   function render(){
+    applyCampaignOwners();
+
     const activeRecordId = store.recordTabs.activeId;
     const activeRecordTab = store.recordTabs.items.find(t=>t.id===activeRecordId) || null;
+
+    const unread = unreadCount();
 
     document.body.innerHTML = `
       <div class="topbar">
@@ -751,7 +951,7 @@
             <div class="logo">SF</div>
             <div>
               <div class="brandTitle">Social Media Console</div>
-              <div class="brandSub">White theme + top tabs + record tabs (dummy data)</div>
+              <div class="brandSub">Prototype v3 • realistic navigation for Salesforce build</div>
             </div>
           </div>
 
@@ -762,7 +962,11 @@
                 ${enums.roles.map(r => `<option ${r===store.user.role?'selected':''}>${r}</option>`).join("")}
               </select>
             </div>
-            <button class="btn" id="helpBtn">Shortcuts</button>
+            <button class="iconBtn" id="bellBtn" title="Notifications">
+              🔔
+              ${unread ? `<span class="dot"></span>` : ``}
+            </button>
+            <button class="btn" id="helpBtn">Help</button>
           </div>
         </div>
         ${renderTopTabs()}
@@ -771,8 +975,14 @@
       ${renderRecordTabs()}
 
       <div id="content">
-        ${activeRecordTab ? renderCaseRecord(activeRecordTab.key) : (store.pageTabs.active==="dashboard" ? renderDashboard() : store.pageTabs.active==="deptQueue" ? renderDeptQueue() : store.pageTabs.active==="sla" ? renderSla() : renderAdmin())}
+        ${activeRecordTab ? renderCaseRecord(activeRecordTab.key) :
+          (store.pageTabs.active==="dashboard" ? renderDashboard() :
+           store.pageTabs.active==="deptQueue" ? renderDeptQueue() :
+           store.pageTabs.active==="sla" ? renderSla() :
+           store.pageTabs.active==="reports" ? renderReports() : renderAdmin())}
       </div>
+
+      ${store.ui.notificationsOpen ? renderNotificationsDrawer() : ""}
     `;
 
     bind(activeRecordTab);
@@ -786,13 +996,25 @@
 
     $("#helpBtn").addEventListener("click", () => {
       alert([
+        "How to use this prototype:",
+        "1) Dashboard: click any case to open in a record tab.",
+        "2) Role switcher: SMT vs DEPT changes available actions.",
+        "3) Manager sorting:",
+        "   - SM list: YELLOW then BROWN then BLUE (BLUE sinks).",
+        "   - Forwarded/Updated: ORANGE then YELLOW then VIOLET.",
+        "4) Notifications (bell): SLA breach + dept update + customer reply.",
+        "",
         "Shortcuts:",
-        "Ctrl+1..9: switch record tabs (if open)",
-        "Ctrl+W: close active record tab (if not pinned)",
-        "Ctrl+Shift+P: pin/unpin active record tab",
-        "Ctrl+K: focus search (Dashboard, when no record tab is active)",
-        "Tip: close record tabs to go back to page tabs."
+        "Ctrl+1..9 switch record tabs",
+        "Ctrl+W close active record tab (if not pinned)",
+        "Ctrl+Shift+P pin/unpin active record tab",
+        "Ctrl+K focus search (Dashboard, when no record tab active)"
       ].join("\n"));
+    });
+
+    $("#bellBtn").addEventListener("click", () => {
+      store.ui.notificationsOpen = true;
+      save(); render();
     });
 
     $$("[data-page]").forEach(li => li.addEventListener("click", () => setActivePage(li.dataset.page)));
@@ -837,23 +1059,34 @@
           if(s){ e.preventDefault(); s.focus(); s.select(); }
         }
       }
+      if(e.key==="Escape" && store.ui.notificationsOpen){
+        store.ui.notificationsOpen = false;
+        save(); render();
+      }
     };
+
+    // drawer actions
+    if(store.ui.notificationsOpen){
+      $("#drawerOverlay").addEventListener("click", () => { store.ui.notificationsOpen=false; save(); render(); });
+      $("#closeDrawerBtn").addEventListener("click", () => { store.ui.notificationsOpen=false; save(); render(); });
+      $("#markAllReadBtn").addEventListener("click", () => {
+        (store.notifications||[]).forEach(n=> n.read=true);
+        save(); render(); toast("Marked all read");
+      });
+      $$("[data-notif]").forEach(el => el.addEventListener("click", () => {
+        const id = el.dataset.notif;
+        const n = store.notifications.find(x=>x.id===id);
+        if(n){ n.read=true; save(); render(); }
+      }));
+    }
+
+    // common open-case bind (also in notifications drawer)
+    $$("[data-open-case]").forEach(el => el.addEventListener("click", () => openCase(el.dataset.openCase)));
 
     if(!activeRecordTab){
       if(store.pageTabs.active==="dashboard") bindDashboard();
-      if(store.pageTabs.active==="admin"){
-        const resetBtn = $("#resetBtn");
-        if(resetBtn) resetBtn.addEventListener("click", () => {
-          if(!confirm("Reset demo data?")) return;
-          store = seedData();
-          save(); render(); toast("Reset complete", "Demo data re-seeded.");
-        });
-      }
-    }
-
-    $$("[data-open-case]").forEach(el => el.addEventListener("click", () => openCase(el.dataset.openCase)));
-
-    if(activeRecordTab){
+      if(store.pageTabs.active==="admin") bindAdmin();
+    }else{
       bindCase(activeRecordTab.key);
     }
   }
@@ -869,8 +1102,6 @@
     wire("searchTxt", () => { ui.search = $("#searchTxt").value; save(); render(); });
 
     $$("[data-channel]").forEach(el => el.addEventListener("click", () => { ui.selectedChannel = el.dataset.channel; save(); render(); }));
-    $$("[data-tab]").forEach(t => t.addEventListener("click", () => { ui.dashboardTab = t.dataset.tab; save(); render(); }));
-    $$("[data-righttab]").forEach(t => t.addEventListener("click", () => { ui.rightTab = t.dataset.righttab; save(); render(); }));
 
     const newBtn = $("#newCaseBtn");
     if(newBtn) newBtn.addEventListener("click", () => {
@@ -878,19 +1109,67 @@
       const ch = enums.channels[Math.floor(Math.random()*enums.channels.length)];
       const subj = ["Need help ASAP","Complaint about staff","Flight delayed","Refund query","Lost baggage"][Math.floor(Math.random()*5)];
       const msg = "Dummy inbound message: " + subj + ". Please assist.";
-      const created = now() - minutes(Math.floor(Math.random()*15));
+      const created = now() - minutes(Math.floor(Math.random()*10));
+      const postId = "POST-" + Math.floor(100000 + Math.random()*900000);
       const c = {
-        id, channel: ch, handle:"@new_user", subject: subj, message: msg,
-        createdAt: created, lastActivityAt: created, firstOpenedAt:null,
-        slaStartMode:"click", slaMinutes: 15,
-        state:"BROWN", status:"New", owner: `${ch} Queue`, assignee:null,
+        id, channel: ch, handle:"@new_user", customerName:"New User", subject: subj, message: msg,
+        originalPostUrl:`https://social.example/${ch.toLowerCase()}/${postId}`, originalPostId: postId,
+        capturedAt: created, createdAt: created,
+        lastActivityAt: created, lastCustomerActivityAt: created, lastSmActivityAt:null, lastDeptActivityAt:null,
+        firstOpenedAt:null,
+        slaStartedAtSM:null, slaMinutesSM: 15, slaStartedAtDept:null, slaMinutesDept: 60,
+        state:"BROWN", status:"New – Unclassified", lane:"SM",
+        ownerQueue: `${ch} Queue`, assignedTo:null,
         type:null, category:null, priority:null, department:null,
-        escalation:false, closureCode:null, resolutionNotes:null, deptUpdate:null,
-        thread:[{who:"Customer", text: msg, at: created}]
+        escalation:false, closureCode:null, resolutionNotes:null,
+        thread:[{who:"Customer", kind:"customer", text: msg, at: created}]
       };
       store.cases.unshift(c);
-      save(); render(); toast("New dummy case added", `Case ${id} in ${ch} queue.`);
+      pushNotif("new_case","New case captured", `${id} created from ${ch}.`, id);
+      save(); render(); toast("New dummy case added", `Case ${id} in ${ch}.`);
     });
+  }
+
+  function bindAdmin(){
+    const resetBtn = $("#resetBtn");
+    if(resetBtn) resetBtn.addEventListener("click", () => {
+      if(!confirm("Reset demo data?")) return;
+      store = seedData();
+      save(); render(); toast("Reset complete", "Demo data re-seeded.");
+    });
+
+    $$("[data-cmp-assign]").forEach(btn => btn.addEventListener("click", () => {
+      const id = btn.dataset.cmpAssign;
+      const sel = document.querySelector(`[data-cmp-sel="${id}"]`);
+      const val = sel ? sel.value : "";
+      const cmp = store.admin.campaigns.find(c => c.id===id);
+      if(!cmp) return;
+      cmp.assignedTo = val || null;
+      pushNotif("campaign","Campaign assignment updated", `${cmp.name} → ${cmp.assignedTo || "Unassigned"}`);
+      save(); render(); toast("Campaign updated", `${cmp.id} → ${cmp.assignedTo || "Unassigned"}`);
+    }));
+
+    $$("[data-cmp-remove]").forEach(btn => btn.addEventListener("click", () => {
+      const id = btn.dataset.cmpRemove;
+      const cmp = store.admin.campaigns.find(c => c.id===id);
+      if(!cmp) return;
+      cmp.assignedTo = null;
+      pushNotif("campaign","Campaign assignment removed", `${cmp.name} is now Unassigned.`);
+      save(); render(); toast("Removed assignment", cmp.id);
+    }));
+  }
+
+  function applyCustomerReply(c, text){
+    const t = now();
+    c.thread.push({who:"Customer", kind:"customer", text, at: t});
+    c.lastActivityAt = t;
+    c.lastCustomerActivityAt = t;
+
+    // If case is in progress anywhere, customer reply makes it YELLOW
+    if(c.lane==="SM" && c.state==="BLUE") c.state = "YELLOW";
+    if(c.lane==="FORWARDED" && (c.state==="VIOLET" || c.state==="ORANGE")) c.state = "YELLOW";
+
+    pushNotif("customer_reply","Customer replied", `${c.id} received a new customer message.`, c.id);
   }
 
   function bindCase(caseId){
@@ -916,21 +1195,33 @@
       catch(e){ toast("Copy failed", "Browser blocked clipboard."); }
     });
 
+    const simCustomerBtn = $("#simCustomerBtn");
+    if(simCustomerBtn) simCustomerBtn.addEventListener("click", () => {
+      applyCustomerReply(c, "Customer follow-up: Any update?");
+      save(); render(); toast("Customer replied", `Case ${c.id} updated.`);
+    });
+
+    const tplSel = $("#tplSel");
+    if(tplSel) tplSel.addEventListener("change", () => {
+      const v = tplSel.value;
+      if(v==="") return;
+      const txt = enums.templates[Number(v)].replace("{name}", c.customerName);
+      $("#msgTxt").value = txt;
+    });
+
     const saveBtn = $("#saveClassBtn");
     if(saveBtn) saveBtn.addEventListener("click", () => {
       c.type = $("#typeSel").value || null;
       c.category = $("#catSel").value || null;
       c.priority = $("#priSel").value || null;
-      const deptVal = $("#deptSel").value;
-      c.department = (deptVal && deptVal !== "—") ? deptVal : null;
+      c.department = $("#deptSel").value || null;
 
-      if(c.state==="BROWN" && c.type && c.category && c.priority){
-        c.state = "GREEN";
-        c.status = "In-Progress";
-        toast("Classified", `Case ${c.id} moved to GREEN.`);
-      }
       c.lastActivityAt = now();
+      if(isSMT) c.lastSmActivityAt = c.lastActivityAt;
+      if(isDept) c.lastDeptActivityAt = c.lastActivityAt;
+
       save(); render();
+      toast("Saved", "Classification updated.");
     });
 
     const sendBtn = $("#sendBtn");
@@ -938,66 +1229,90 @@
       const txt = ($("#msgTxt")?.value || "").trim();
       if(!txt) return toast("Nothing to send", "Type a message first.");
 
-      const classificationValid = !!(c.type && c.category && c.priority);
-
       if(isSMT){
-        if(!classificationValid) return toast("Blocked", "Classify before replying.");
-        c.thread.push({who:"SMT", text: txt, at: now()});
-        c.state = "GREEN";
+        startSlaOnOpen(c); // ensure attended
+        const t = now();
+        c.thread.push({who:"SMT", kind:"sm", text: txt, at: t});
+        c.lastActivityAt = t;
+        c.lastSmActivityAt = t;
+
+        // After SMT reply: case should be BLUE and sink to bottom (until customer replies)
+        if(c.lane==="SM") c.state = "BLUE";
+        if(c.lane==="FORWARDED"){
+          // SMT replying while forwarded means it's being handled; keep in forwarded until moved back (demo)
+          c.state = "VIOLET";
+        }
         c.status = "In-Progress";
-        c.lastActivityAt = now();
+
         $("#msgTxt").value = "";
-        toast("Reply sent (demo)", "Posted to thread and logged.");
+        save(); render();
+        toast("Sent (demo)", "Case will sink unless customer replies (YELLOW).");
       }else if(isDept){
-        c.thread.push({who:(c.department || "Dept")+" Team", text: txt, at: now()});
-        c.deptUpdate = {dept: (c.department || "Dept"), summary: txt.slice(0,70) + (txt.length>70?"…":""), at: now()};
-        c.state = "BLUE";
+        const t = now();
+        if(!c.slaStartedAtDept) c.slaStartedAtDept = t;
+        c.thread.push({who:(c.department || "Dept")+" Team", kind:"dept", text: txt, at: t});
+        c.lastDeptActivityAt = t;
+        c.lastActivityAt = t;
+
+        c.state = "ORANGE";
         c.status = "Returned to SMT";
-        c.owner = `${c.channel} Queue`;
-        c.lastActivityAt = now();
+        c.lane = "FORWARDED";
+
         $("#msgTxt").value = "";
-        toast("Dept updated SMT", "Case moved to BLUE.");
+        pushNotif("dept_update","Dept updated case", `${c.id} received internal update.`, c.id);
+        save(); render();
+        toast("Internal update added", "Case turned ORANGE and moves to top.");
       }else{
         toast("Blocked", "Switch role to SMT or DEPT.");
       }
-      save(); render();
     });
 
     const noteBtn = $("#noteBtn");
     if(noteBtn) noteBtn.addEventListener("click", () => {
       const txt = ($("#msgTxt")?.value || "").trim();
       if(!txt) return toast("Nothing to add", "Type text first.");
-      c.thread.push({who:"Internal Note", text: txt, at: now()});
-      c.lastActivityAt = now();
+      const t = now();
+      c.thread.push({who:"Internal Note", kind:"note", text: txt, at: t});
+      c.lastActivityAt = t;
       $("#msgTxt").value = "";
-      toast("Internal note added", `Case ${c.id}`);
       save(); render();
+      toast("Internal note added", `Case ${c.id}`);
     });
 
     const routeBtn = $("#routeBtn");
     if(routeBtn) routeBtn.addEventListener("click", () => {
-      const classificationValid = !!(c.type && c.category && c.priority);
-      if(!isSMT) return toast("Blocked", "Only SMT can route.");
-      if(!classificationValid) return toast("Blocked", "Classify before routing.");
-      const deptVal = $("#deptSel").value;
-      const dept = (deptVal && deptVal !== "—") ? deptVal : "Refunds";
+      if(!isSMT) return toast("Blocked", "Only SMT can forward.");
+      const dept = ($("#deptSel")?.value || "").trim() || "Refunds";
       c.department = dept;
-      c.state = "YELLOW";
+
+      const t = now();
+      startSlaOnOpen(c);
+      c.state = "VIOLET";
       c.status = "Assigned to Department";
-      c.owner = `${dept} Queue`;
-      c.thread.push({who:"SMT", text:`Forwarded to ${dept} team.`, at: now()});
-      c.lastActivityAt = now();
-      save(); toast("Routed", `${dept} Queue`);
+      c.lane = "FORWARDED";
+      c.thread.push({who:"SMT", kind:"sm", text:`Forwarded to ${dept} team.`, at: t});
+      c.lastActivityAt = t;
+      c.lastSmActivityAt = t;
+
+      pushNotif("forwarded","Case forwarded", `${c.id} forwarded to ${dept}.`, c.id);
+
+      save(); render();
       setActivePage("deptQueue");
+      toast("Forwarded", `${dept} Queue (VIOLET).`);
     });
 
     const escBtn = $("#escalateBtn");
     if(escBtn) escBtn.addEventListener("click", () => {
       if(!isSMT) return toast("Blocked", "Only SMT can escalate.");
+      const t = now();
+      startSlaOnOpen(c);
       c.escalation = true;
       c.status = "Escalated";
-      c.lastActivityAt = now();
-      save(); toast("Escalated", "Supervisor notified (demo)."); render();
+      c.lastActivityAt = t;
+      c.lastSmActivityAt = t;
+      pushNotif("escalation","Case escalated", `${c.id} escalated due to SLA/priority.`, c.id);
+      save(); render();
+      toast("Escalated", "Supervisor notified (demo).");
     });
 
     const closureSel = $("#closureSel");
@@ -1010,35 +1325,45 @@
     if(closeBtn) closeBtn.addEventListener("click", () => {
       const closure = $("#closureSel").value;
       const notes = ($("#resNotes")?.value || "").trim();
-      const classificationValid = !!(c.type && c.category && c.priority);
 
       if(isDept){
         if(!closure || closure==="—") return toast("Blocked", "Dept must set Closure Code.");
         if(!notes) return toast("Blocked", "Dept must add Resolution Notes.");
       } else if(isSMT){
-        if(!classificationValid) return toast("Blocked", "Classify before close.");
         if(!closure || closure==="—") return toast("Blocked", "Set Closure Code.");
       } else {
         return toast("Blocked", "Switch role to SMT or DEPT to close.");
       }
 
+      const t = now();
       c.closureCode = closure;
       if(isDept) c.resolutionNotes = notes;
       c.status = "Closed";
       c.state = "CLOSED";
-      c.lastActivityAt = now();
-      save(); toast("Closed", `Case ${c.id} closed.`);
+      c.lastActivityAt = t;
+
+      pushNotif("closed","Case closed", `${c.id} closed with code: ${closure}.`, c.id);
+
+      save(); render();
+      toast("Closed", `Case ${c.id} closed.`);
       closeRecordTab("case_" + caseId);
     });
   }
 
+  // SLA breach checker (demo)
   setInterval(() => {
-    if(!document.hidden){
-      if(!store.recordTabs.activeId && (store.pageTabs.active==="dashboard" || store.pageTabs.active==="sla")){
-        render();
+    let changed = false;
+    store.cases.forEach(c => {
+      if(c.status==="Closed") return;
+      const s = c.lane==="FORWARDED" ? slaRemainingDept(c) : slaRemainingSM(c);
+      if(s.state==="BREACHED" && !c._breachNotified){
+        c._breachNotified = true;
+        pushNotif("sla_breach","SLA breached", `${c.id} breached SLA (${c.lane}).`, c.id);
+        changed = true;
       }
-    }
-  }, 30000);
+    });
+    if(changed) { save(); render(); }
+  }, 15000);
 
   render();
 })();
